@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Clinic Room Assignment App</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #f4f4f4;
+    }
+    h1, h2 {
+      color: #333;
+    }
+    /* Input panel styling */
+    #inputPanel {
+      background: #fff;
+      padding: 15px;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+    }
+    label {
+      font-weight: bold;
+      margin-right: 5px;
+    }
+    input[type="time"],
+    input[type="text"] {
+      padding: 5px;
+      font-size: 1em;
+      margin-bottom: 10px;
+    }
+    #timeModeToggle {
+      margin-bottom: 10px;
+    }
+    #appointmentTypeButtons {
+      margin-top: 10px;
+    }
+    #appointmentTypeButtons button {
+      margin: 5px 3px;
+      padding: 8px 12px;
+      font-size: 0.9em;
+      border: none;
+      border-radius: 3px;
+      background: #007BFF;
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #appointmentTypeButtons button:hover {
+      background: #0056b3;
+    }
+    /* Assignment output styling */
+    #assignmentOutput {
+      margin-bottom: 20px;
+      padding: 10px;
+      background: #e9ffe9;
+      border: 1px solid #7fd97f;
+      border-radius: 5px;
+    }
+    /* Timetable container styling */
+    #timetableView {
+      background: #fff;
+      padding: 10px;
+      border-radius: 5px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.1);
+      overflow-x: auto;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin-top: 5px;
+      font-size: 0.9em;
+    }
+    th, td {
+      border: 1px solid #999;
+      padding: 4px;
+      text-align: center;
+    }
+    td {
+      min-width: 80px;
+    }
+    /* Hour-group header (always visible) */
+    .hour-header {
+      background-color: #ddd;
+      cursor: pointer;
+    }
+    .toggleIndicator {
+      float: right;
+      font-weight: bold;
+    }
+    /* Appointment summary styling */
+    .aptSummary {
+      background-color: #aaf;
+      padding: 2px;
+      margin: 2px 0;
+      position: relative;
+    }
+    .adjustBtn {
+      font-size: 0.8em;
+      margin: 0 2px;
+      cursor: pointer;
+    }
+    /* Detailed view nested table styling */
+    .detailedTable {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8em;
+    }
+    .detailedTable th, .detailedTable td {
+      border: 1px solid #ccc;
+      padding: 2px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Clinic Room Assignment App</h1>
+  
+  <!-- Input Panel -->
+  <div id="inputPanel">
+    <div id="timeModeToggle">
+      <input type="radio" name="timeMode" id="timeNow" value="now" checked>
+      <label for="timeNow">Now</label>
+      <input type="radio" name="timeMode" id="timeCustom" value="custom">
+      <label for="timeCustom">Custom</label>
+    </div>
+    <div>
+      <label for="currentTimeInput">Current Time:</label>
+      <input type="time" id="currentTimeInput" min="08:00" max="20:00" value="08:00" disabled>
+    </div>
+    <div>
+      <label for="patientNameInput">Patient Name:</label>
+      <input type="text" id="patientNameInput" placeholder="Enter patient name">
+    </div>
+    <div id="appointmentTypeButtons">
+      <button class="aptTypeBtn" data-type="IDED">IDED (2 hrs 30 mins)</button>
+      <button class="aptTypeBtn" data-type="New Patient">New Patient (1 hr 15 mins)</button>
+      <button class="aptTypeBtn" data-type="Up-dose">Up-dose (1 hr 15 mins, uses room for 15 mins)</button>
+      <button class="aptTypeBtn" data-type="Blood Draw">Blood Draw (20 mins)</button>
+      <button class="aptTypeBtn" data-type="Skin Test">Skin Test (20 mins)</button>
+      <button class="aptTypeBtn" data-type="Food Challenge">Food Challenge (4 hrs)</button>
+      <button class="aptTypeBtn" data-type="Office Visit">Office Visit (30 mins)</button>
+    </div>
+  </div>
+  
+  <!-- Assignment Output -->
+  <div id="assignmentOutput">
+    <h2>Latest Assignment</h2>
+    <p id="latestAssignmentMessage">No appointments yet.</p>
+  </div>
+  
+  <!-- Timetable View -->
+  <div id="timetableView">
+    <h2>Full Timetable (by Hour)</h2>
+    <div id="timetableContainer"></div>
+  </div>
+  
+  <script>
+    /***** GLOBAL SETTINGS AND DATA *****/
+    let appointments = [];
+    let nextAppointmentId = 1;
+    
+    // Day runs from 8:00 AM to 8:00 PM
+    const startHour = 8;
+    const endHour = 20;
+    const totalHours = endHour - startHour;
+    const slotDuration = 1; // 1-minute slots
+    // In detailed view we use a small row height since there are many rows
+    const rowHeight = 10;  
+    const cleanupBuffer = 5; // 5 minute cleaning period after each appointment
+    
+    // Appointment durations in minutes
+    const patientDurations = {
+      'IDED': 150,
+      'New Patient': 75,
+      'Up-dose': 15,
+      'Blood Draw': 20,
+      'Skin Test': 20,
+      'Food Challenge': 240,
+      'Office Visit': 30
+    };
+    
+    // For Up-dose, effective room usage is 15 minutes by default.
+    
+    // Global object to track which hour groups are expanded (default: collapsed)
+    let expandedHours = {};
+    for (let h = startHour; h < endHour; h++) {
+      expandedHours[h] = false;
+    }
+    
+    /***** HELPER FUNCTIONS *****/
+    // Converts a time string (HH:MM) to an offset (minutes from 8:00 AM)
+    function timeStringToOffset(timeStr) {
+      const parts = timeStr.split(':');
+      let hours = parseInt(parts[0], 10);
+      let minutes = parseInt(parts[1], 10);
+      let total = hours * 60 + minutes;
+      return total - (startHour * 60);
+    }
+    
+    // Converts an offset (minutes from 8:00) to a formatted time string (e.g., "8:05 AM")
+    function offsetToTimeString(offset) {
+      let total = offset + startHour * 60;
+      let hours = Math.floor(total / 60);
+      let minutes = total % 60;
+      let ampm = hours >= 12 ? 'PM' : 'AM';
+      if (hours > 12) hours -= 12;
+      if (hours === 0) hours = 12;
+      return hours + ':' + (minutes < 10 ? '0' : '') + minutes + ' ' + ampm;
+    }
+    
+    /***** ROOM ASSIGNMENT ALGORITHM *****/
+    // Processes appointments in order and assigns each a room. If a room is busy,
+    // the appointment is delayed until the room becomes available.
+    function updateRoomAssignments() {
+      let sorted = appointments.slice().sort((a, b) => a.start - b.start);
+      // For each room (1-7), track when it becomes free (in minutes from 8:00)
+      let roomLastEnd = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0};
+      let assignments = {};
+      
+      sorted.forEach(apt => {
+        let t0 = apt.start;
+        let allowed = [];
+        let type = apt.patientType;
+        if (type === 'Up-dose') {
+          allowed = [5, 6, 7];
+        } else if (type === 'Blood Draw' || type === 'Skin Test') {
+          // Prefer rooms 1-4 if available at the desired time; otherwise, use 5-7.
+          let group1Free = [1, 2, 3, 4].filter(r => roomLastEnd[r] <= t0);
+          allowed = (group1Free.length > 0) ? [1, 2, 3, 4] : [5, 6, 7];
+        } else {
+          allowed = [1, 2, 3, 4];
+        }
+        
+        // Choose the allowed room that becomes free the earliest.
+        let bestRoom = allowed[0];
+        let bestAvailable = Math.max(t0, roomLastEnd[bestRoom]);
+        for (let r of allowed) {
+          let available = Math.max(t0, roomLastEnd[r]);
+          if (available < bestAvailable) {
+            bestAvailable = available;
+            bestRoom = r;
+          }
+        }
+        // Delay the appointment if needed.
+        apt.start = bestAvailable;
+        // The effective block covers the appointment's usage plus the cleaning buffer.
+        let effectiveDuration = apt.usageDuration + cleanupBuffer;
+        roomLastEnd[bestRoom] = apt.start + effectiveDuration;
+        assignments[apt.id] = bestRoom;
+      });
+      return assignments;
+    }
+    
+    /***** BUILD TIMETABLE SUMMARY VIEW *****/
+    // Builds a summary table with one row per hour. Each hour row shows a summary
+    // of appointments (with adjustment buttons) in each room for that hour.
+    // If the hour is expanded, a detailed (minute-by-minute) sub-table is inserted.
+    function buildTimetableSummary(assignments) {
+      let html = '<table>';
+      // Header row: "Hour" and one column per room.
+      html += '<tr><th>Hour</th>';
+      for (let r = 1; r <= 7; r++) {
+        html += `<th>Room ${r}</th>`;
+      }
+      html += '</tr>';
+      
+      // Loop through each hour group.
+      for (let h = startHour; h < endHour; h++) {
+        let hourOffset = (h - startHour) * 60; // minutes offset for this hour group
+        // Hour header row with toggle indicator.
+        html += `<tr class="hour-header" data-hour="${h}">`;
+        html += `<td colspan="8" style="cursor:pointer; background-color:#ddd;">`;
+        html += `${h}:00 - ${h}:59 <span class="toggleIndicator">[${expandedHours[h] ? '-' : '+'}]</span>`;
+        html += `</td></tr>`;
+        
+        // Summary row for the hour.
+        html += `<tr class="hour-summary" data-hour="${h}">`;
+        html += `<td>${h}:00 - ${h}:59</td>`;
+        for (let r = 1; r <= 7; r++) {
+          // List appointments that start in this hour in room r.
+          let aptList = appointments.filter(apt => {
+            return (assignments[apt.id] === r && apt.start >= hourOffset && apt.start < hourOffset + 60);
+          });
+          let cellContent = '';
+          aptList.forEach(apt => {
+            cellContent += `<div class="aptSummary" data-apt-id="${apt.id}">`;
+            cellContent += `<strong>${apt.patientName}</strong> (${apt.patientType})<br>`;
+            cellContent += `${offsetToTimeString(apt.start)} - ${offsetToTimeString(apt.start + apt.usageDuration)} `;
+            cellContent += `<span class="adjustControls">`;
+            cellContent += `<button class="adjustUsage adjustBtn" data-apt-id="${apt.id}" data-adjust="+">+</button>`;
+            cellContent += `<button class="adjustUsage adjustBtn" data-apt-id="${apt.id}" data-adjust="-">-</button>`;
+            cellContent += `</span>`;
+            cellContent += `</div>`;
+          });
+          html += `<td>${cellContent}</td>`;
+        }
+        html += `</tr>`;
+        
+        // If this hour is expanded, include a detailed sub-table.
+        if (expandedHours[h]) {
+          html += `<tr class="hour-detailed" data-hour="${h}"><td colspan="8">`;
+          html += buildDetailedTableForHour(h, assignments);
+          html += `</td></tr>`;
+        }
+      }
+      html += '</table>';
+      return html;
+    }
+    
+    /***** BUILD DETAILED TABLE FOR A GIVEN HOUR *****/
+    // This function builds a minute-by-minute detailed table for one hour.
+    // For each minute in that hour and for each room, it checks whether an appointment
+    // is active. If so, it shows a blue cell for the appointment block and a yellow
+    // cell for the cleaning block.
+    function buildDetailedTableForHour(h, assignments) {
+      let hourOffset = (h - startHour) * 60; // overall minute offset for this hour
+      let html = '<table class="detailedTable">';
+      html += '<tr><th>Time</th>';
+      for (let r = 1; r <= 7; r++) {
+        html += `<th>Room ${r}</th>`;
+      }
+      html += '</tr>';
+      for (let m = 0; m < 60; m++) {
+        let overallMinute = hourOffset + m;
+        html += '<tr>';
+        html += `<td>${offsetToTimeString(overallMinute)}</td>`;
+        for (let r = 1; r <= 7; r++) {
+          // Find an appointment that covers this minute in room r.
+          // The effective block is from apt.start to apt.start + apt.usageDuration (appointment)
+          // and from apt.start + apt.usageDuration to apt.start + apt.usageDuration + cleanupBuffer (clean-up).
+          let apt = appointments.find(a => assignments[a.id] === r &&
+                                           overallMinute >= a.start &&
+                                           overallMinute < a.start + a.usageDuration + cleanupBuffer);
+          if (apt) {
+            if (overallMinute < apt.start + apt.usageDuration) {
+              // Appointment block (blue)
+              html += `<td style="background-color:#aaf;">`;
+              html += `<div><strong>${apt.patientName}</strong><br>${apt.patientType}<br>`;
+              html += `${offsetToTimeString(apt.start)} - ${offsetToTimeString(apt.start + apt.usageDuration)}`;
+              html += `</div></td>`;
+            } else {
+              // Cleaning block (yellow)
+              html += `<td style="background-color:yellow;">`;
+              html += `<div><small>Clean Up</small></div></td>`;
+            }
+          } else {
+            html += '<td></td>';
+          }
+        }
+        html += '</tr>';
+      }
+      html += '</table>';
+      return html;
+    }
+    
+    /***** ATTACH LISTENERS FOR HOUR TOGGLES *****/
+    function attachHourToggleListeners() {
+      document.querySelectorAll('.hour-header').forEach(header => {
+        header.addEventListener('click', function() {
+          let h = parseInt(this.getAttribute('data-hour'));
+          expandedHours[h] = !expandedHours[h];
+          updateView();
+        });
+      });
+    }
+    
+    /***** ATTACH ADJUSTMENT BUTTON LISTENERS *****/
+    function attachAdjustmentListeners() {
+      document.querySelectorAll('.adjustUsage').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          let aptId = parseInt(this.getAttribute('data-apt-id'));
+          let adjust = this.getAttribute('data-adjust');
+          let apt = appointments.find(a => a.id === aptId);
+          if (!apt) return;
+          if (adjust === '+') {
+            apt.usageDuration += 5;
+          } else if (adjust === '-') {
+            apt.usageDuration = Math.max(5, apt.usageDuration - 5);
+          }
+          updateView(apt.id);
+        });
+      });
+    }
+    
+    /***** UPDATE THE WHOLE VIEW *****/
+    function updateView(latestAptId = null) {
+      let assignments = updateRoomAssignments();
+      let timetableHTML = buildTimetableSummary(assignments);
+      document.getElementById('timetableContainer').innerHTML = timetableHTML;
+      if (latestAptId !== null) {
+        let apt = appointments.find(a => a.id === latestAptId);
+        if (apt) {
+          let room = assignments[apt.id];
+          document.getElementById('latestAssignmentMessage').innerText =
+             `Patient "${apt.patientName}" (${apt.patientType}) scheduled at ${offsetToTimeString(apt.start)} is assigned to Room ${room}.`;
+        }
+      }
+      attachAdjustmentListeners();
+      attachHourToggleListeners();
+    }
+
+    const NAMES = ['llama', 'panda', 'koala', 'otter', 'tiger', 'chimp', 'moose', 'sparky', 'wizard', 'jelly', 'wolf']
+    
+    /***** ADD A NEW APPOINTMENT *****/
+    function addAppointment(aptType) {
+      let offset;
+      // Use "Now" if selected; otherwise, use the custom time input.
+      if (document.getElementById('timeNow').checked) {
+        let now = new Date();
+        let hours = now.getHours();
+        let minutes = now.getMinutes();
+        let total = hours * 60 + minutes;
+        let startTotal = startHour * 60;
+        let endTotal = endHour * 60;
+        if (total < startTotal) total = startTotal;
+        if (total > endTotal) total = endTotal;
+        let currentTimeStr = (hours < 10 ? '0' : '') + hours + ':' + (minutes < 10 ? '0' : '') + minutes;
+        offset = timeStringToOffset(currentTimeStr);
+      } else {
+        let customTime = document.getElementById('currentTimeInput').value;
+        offset = timeStringToOffset(customTime);
+      }
+      
+      const nameInput = document.getElementById('patientNameInput').value.trim();
+      if (!nameInput) {
+        alert("Please enter the patient name.");
+        return;
+      }
+      
+      let duration = patientDurations[aptType];
+      if (!duration) {
+        alert("Invalid appointment type.");
+        return;
+      }
+      // For Up-dose, effective room usage is 15 minutes by default.
+      let usageDuration = (aptType === 'Up-dose') ? 15 : duration;
+      let newApt = {
+        id: nextAppointmentId++,
+        patientName: nameInput,
+        patientType: aptType,
+        start: offset,  // in minutes from 8:00 AM
+        duration: duration,
+        usageDuration: usageDuration
+      };
+      appointments.push(newApt);
+      updateView(newApt.id);
+      document.getElementById('patientNameInput').value = NAMES[Math.ceil(Math.random() * NAMES.length)];
+    }
+    
+    document.getElementById('patientNameInput').value = NAMES[Math.floor(Math.random() * NAMES.length)];
+
+    /***** EVENT LISTENERS *****/
+    window.onload = function() {
+      // Appointment type buttons
+      document.querySelectorAll('.aptTypeBtn').forEach(btn => {
+        btn.addEventListener('click', function() {
+          let aptType = this.getAttribute('data-type');
+          addAppointment(aptType);
+        });
+      });
+      // Time mode toggle: if "Now" is selected, disable custom time input.
+      document.getElementById('timeNow').addEventListener('change', function() {
+        if (this.checked) {
+          document.getElementById('currentTimeInput').disabled = true;
+        }
+      });
+      document.getElementById('timeCustom').addEventListener('change', function() {
+        if (this.checked) {
+          document.getElementById('currentTimeInput').disabled = false;
+        }
+      });
+      // When custom time changes, update the view.
+      document.getElementById('currentTimeInput').addEventListener('change', function() {
+        updateView();
+      });
+      // Initial render.
+      updateView();
+    }
+  </script>
+</body>
+</html>
+
