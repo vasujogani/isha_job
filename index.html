@@ -130,7 +130,7 @@
     </div>
     <div>
       <label for="patientNameInput">Patient Name:</label>
-      <input type="text" id="patientNameInput" placeholder="Enter patient name">
+      <input type="text" id="patientNameInput" placeholder="Enter patient name" value="turtle">
     </div>
     <div id="appointmentTypeButtons">
       <button class="aptTypeBtn" data-type="IDED">IDED (2 hrs 30 mins)</button>
@@ -178,6 +178,9 @@
       'Skin Test': 20,
       'Food Challenge': 240,
       'Office Visit': 30
+    };
+    let roomAvailability = {
+      1: true, 2: true, 3: true, 4: true, 5: true, 6: true, 7: true
     };
     
     // For Up-dose, effective room usage is 15 minutes by default.
@@ -231,6 +234,13 @@
         } else {
           allowed = [1, 2, 3, 4];
         }
+
+        allowed = allowed.filter(r => roomAvailability[r]);
+        if (allowed.length === 0) {
+          // No allowed room is available, so leave appointment unassigned.
+          assignments[apt.id] = null;
+          return; // Skip updating roomLastEnd for this appointment.
+        }
         
         // Choose the allowed room that becomes free the earliest.
         let bestRoom = allowed[0];
@@ -261,7 +271,9 @@
       // Header row: "Hour" and one column per room.
       html += '<tr><th>Hour</th>';
       for (let r = 1; r <= 7; r++) {
-        html += `<th>Room ${r}</th>`;
+        let availChecked = roomAvailability[r] ? "checked" : "";
+
+        html += `<th>Room ${r}<br><label style="font-size:0.8em;"><input type="checkbox" class="roomToggle" data-room="${r}" ${availChecked}> Available</label></th>`;
       }
       html += '</tr>';
       
@@ -383,6 +395,19 @@
         });
       });
     }
+
+    /***** ATTACH ROOM TOGGLE LISTENERS *****/
+
+    function attachRoomToggleListeners() {
+      document.querySelectorAll('.roomToggle').forEach(toggle => {
+        toggle.addEventListener('change', function() {
+          let room = parseInt(this.getAttribute('data-room'));
+          roomAvailability[room] = this.checked;
+          updateView();
+        });
+      });
+    }
+
     
     /***** UPDATE THE WHOLE VIEW *****/
     function updateView(latestAptId = null) {
@@ -393,12 +418,17 @@
         let apt = appointments.find(a => a.id === latestAptId);
         if (apt) {
           let room = assignments[apt.id];
-          document.getElementById('latestAssignmentMessage').innerText =
-             `Patient "${apt.patientName}" (${apt.patientType}) scheduled at ${offsetToTimeString(apt.start)} is assigned to Room ${room}.`;
+
+          let msg = room 
+              ? `Patient "${apt.patientName}" (${apt.patientType}) scheduled at ${offsetToTimeString(apt.start)} is assigned to Room ${room}.` 
+              : `Patient "${apt.patientName}" (${apt.patientType}) scheduled at ${offsetToTimeString(apt.start)} cannot be assigned (no available room).`;
+
+          document.getElementById('latestAssignmentMessage').innerText = msg
         }
       }
       attachAdjustmentListeners();
       attachHourToggleListeners();
+      attachRoomToggleListeners();
     }
 
     const NAMES = ['llama', 'panda', 'koala', 'otter', 'tiger', 'chimp', 'moose', 'sparky', 'wizard', 'jelly', 'wolf']
@@ -449,7 +479,6 @@
       document.getElementById('patientNameInput').value = NAMES[Math.ceil(Math.random() * NAMES.length)];
     }
     
-    document.getElementById('patientNameInput').value = NAMES[Math.floor(Math.random() * NAMES.length)];
 
     /***** EVENT LISTENERS *****/
     window.onload = function() {
